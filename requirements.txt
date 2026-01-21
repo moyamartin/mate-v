@@ -1,2 +1,0 @@
-makerchip-app
-setuptools

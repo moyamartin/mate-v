@@ -1,0 +1,22 @@
+{
+  "name": "TL-Verilog Dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  // Set the remote user to 'vscode' (standard for mcr images) to avoid permission issues
+  "remoteUser": "vscode",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/mate-v,type=bind",
+  // Customizations for VS Code
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dmytro.tl-verilog",       // Official TL-Verilog extension (highlighting/snippets)
+        "mshr-h.veriloghdl"     // Standard Verilog support (useful for generated files)
+      ]
+    }
+  },
+  // Optional: Post-create command to verify installation
+  "postCreateCommand": "sudo chown -R vscode /workspace"
+}
