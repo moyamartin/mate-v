@@ -29,6 +29,7 @@
    // Test result value in x14, and set x31 to reflect pass/fail.
    m4_asm(ADDI, x30, x14, 111111010100) // Subtract expected value of 44 to set x30 to 1 if and only iff the result is 45 (1 + 2 + ... + 9).
    m4_asm(BGE, x0, x0, 0) // Done. Jump to itself (infinite loop). (Up to 20-bit signed immediate plus implicit 0 bit (unlike JALR) provides byte address; last immediate bit should also be 0)
+   m4_asm(ADDI, x0, x0, 1)
    m4_asm_end()
    m4_define(['M4_MAX_CYC'], 50)
    //---------------------------------------------------------------------------------
@@ -38,20 +39,95 @@
 \SV
    m4_makerchip_module   // (Expanded in Nav-TLV pane.)
    /* verilator lint_on WIDTH */
-\TLV
-   
+\TLV   
+
    $reset = *reset;
    
+   /* Program Counter section */
+   $next_pc[31:0] = $reset ? 0 :
+       $taken_br ? $br_tgt_pc :
+       $pc + 4;
+   $pc[31:0] = >>1$next_pc;
+   /* End Program Counter Section */
    
-   // YOUR CODE HERE
-   // ...
+   /** Instruction Memory section */
+   `READONLY_MEM($pc, $$instr[31:0])
    
+   
+   /** Instruction Decode Logic section */
+   
+   /** Decode instruction type */
+   $is_u_instr = $instr[6:2] ==? 5'b0x101;
+   $is_i_instr = $instr[6:2] ==? 5'b00000 ||
+                 $instr[6:2] ==? 5'b00001 ||
+                 $instr[6:2] ==? 5'b00100 ||
+                 $instr[6:2] ==? 5'b00110 ||
+                 $instr[6:2] ==? 5'b11100;
+   $is_s_instr = $instr[6:2] ==? 5'b01000 ||
+                 $instr[6:2] ==? 5'b01001;
+   $is_r_instr = $instr[6:2] ==? 5'b01011 ||
+                 $instr[6:2] ==? 5'b01100 ||
+                 $instr[6:2] ==? 5'b01110;
+   $is_b_instr = $instr[6:2] ==? 5'b011000;
+   $is_j_instr = $instr[6:2] ==? 5'b11011;
+   
+   /** Decode instruction fields */
+   $opcode[6:0] = $instr[6:0];
+   $rd[4:0] = $instr[11:7];
+   $rd_valid = ($is_r_instr || $is_i_instr || $is_u_instr || $is_j_instr) && $rd !== 5'b0_0000;
+   $rs1[4:0] = $instr[19:15];
+   $rs1_valid = $is_r_instr || $is_i_instr || $is_s_instr || $is_b_instr;
+   $rs2[4:0] = $instr[24:20];
+   $rs2_valid = $is_r_instr || $is_s_instr || $is_b_instr;
+   $funct3[2:0] = $instr[14:12];
+   $funct3_is_valid = $is_r_instr || $is_i_instr || $is_s_instr || $is_b_instr;
+   $imm_valid = $is_i_instr || $is_s_instr || $is_b_instr || $is_u_instr || $is_j_instr;
+   $imm[31:0] = $is_i_instr ? { {21{$instr[31]}}, $instr[30:20] } :
+                $is_s_instr ? { {21{$instr[31]}}, $instr[30:25] , $instr[11:7]} :
+                $is_b_instr ? { {20{$instr[31]}}, $instr[7], $instr[30:25], $instr[11:8], $instr[8] } :
+                $is_u_instr ? { $instr[31:13], {13{$instr[12]}} }:
+                $is_j_instr ? { {12{$instr[20]}}, $instr[19:12], $instr[20], $instr[30:21], $instr[21]} :
+                32'b0;
+                
+   /** decode instruction */
+   $dec_bits[10:0] = {$instr[30], $funct3, $opcode};
+   
+   $is_beq = $dec_bits ==? 11'bx_000_1100011;
+   $is_bne = $dec_bits ==? 11'bx_001_1100011;
+   $is_blt = $dec_bits ==? 11'bx_100_1100011;
+   $is_bge = $dec_bits ==? 11'bx_101_1100011;
+   $is_bltu = $dec_bits ==? 11'bx_110_1100011;
+   $is_bgeu = $dec_bits ==? 11'bx_111_1100011;
+   $is_addi = $dec_bits ==? 11'bx_000_0010011;
+   $is_add = $dec_bits ==? 11'bx_000_0110011; 
+                
+   `BOGUS_USE($opcode $rd $rd_valid $rs1 $rs1_valid $rs2 $rs2_valid
+              $funct3 $funct3_is_valid $imm_valid $imm $is_beq $is_bne
+              $is_blt $is_bge $is_bltu $is_bgeu $is_addi $is_add);
+              
+   /** ALU (Arithmetic logic unit) */
+   $result[31:0] =
+       $is_addi ? $src1_value + $imm :
+       $is_add ? $src1_value + $src2_value :
+       32'b0;
+       
+   /* Branch logic */
+   $taken_br =
+       ($is_beq && ($src1_value === $src2_value)) ? $is_beq :
+       ($is_bne && ($src1_value !== $src2_value)) ? $is_bne :
+       ($is_blt && (($src1_value < $src2_value) ^ ($src1_value[31] != $src2_value[31]))) ? $is_blt :
+       ($is_bge && (($src1_value >= $src2_value) ^ ($src1_value[31] != $src2_value[31]))) ? $is_bge :
+       ($is_bltu && ($src1_value < $src2_value)) ? $is_bltu :
+       ($is_bgeu && ($src1_value >= $src2_value)) ? $is_bgeu :
+       1'b0;
+   $br_tgt_pc[31:0] = $pc + $imm;
    
    // Assert these to end simulation (before Makerchip cycle limit).
-   *passed = 1'b0;
+   m4+tb()
    *failed = *cyc_cnt > M4_MAX_CYC;
    
    //m4+rf(32, 32, $reset, $wr_en, $wr_index[4:0], $wr_data[31:0], $rd_en1, $rd_index1[4:0], $rd_data1, $rd_en2, $rd_index2[4:0], $rd_data2)
+   m4+rf(32, 32, $reset, $rd_valid, $rd[4:0], $result[31:0], $rs1_valid, $rs1[4:0], $src1_value, $rs2_valid, $rs2[4:0], $src2_value)
    //m4+dmem(32, 32, $reset, $addr[4:0], $wr_en, $wr_data[31:0], $rd_en, $rd_data)
    m4+cpu_viz()
 \SV
